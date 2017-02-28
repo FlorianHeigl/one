@@ -30,7 +30,6 @@ require 'set'
 require 'nokogiri'
 
 require 'opennebula'
-include OpenNebula
 
 module OneDBFsck
     VERSION = "5.2.0"
@@ -1587,8 +1586,8 @@ EOT
                 doc.root.each_element("STATE") { |e|
                     if e.text != state.to_s
                         log_error("Image #{oid} has STATE " <<
-                                  Image::IMAGE_STATES[e.text.to_i] <<
-                                  " \tis\t#{Image::IMAGE_STATES[state]}")
+                            OpenNebula::Image::IMAGE_STATES[e.text.to_i] <<
+                            " \tis\t#{OpenNebula::Image::IMAGE_STATES[state]}")
                         e.text = state
                     end
                 }
