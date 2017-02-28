@@ -35,8 +35,16 @@ module OneDBFsck
     VERSION = "5.2.0"
     LOCAL_VERSION = "5.3.80"
 
+    def db_version
+        if defined?(@db_version) && @db_version
+            @db_version
+        else
+            @db_version = read_db_version
+        end
+    end
+
     def check_db_version()
-        db_version = read_db_version()
+        # db_version = read_db_version()
 
         if ( db_version[:version] != VERSION ||
              db_version[:local_version] != LOCAL_VERSION )
@@ -55,107 +63,34 @@ EOT
         "OpenNebula #{VERSION}"
     end
 
-    def db_version
-        one_version()
-    end
+    # def db_version
+    #     one_version()
+    # end
 
     VM_BIN      = 0x0000001000000000
     NET_BIN     = 0x0000004000000000
     VROUTER_BIN = 0x0004000000000000
     HOLD        = 0xFFFFFFFF
 
-    def fsck
+    TABLES = ["group_pool", "user_pool", "acl", "image_pool", "host_pool",
+        "network_pool", "template_pool", "vm_pool", "cluster_pool",
+        "datastore_pool", "document_pool", "zone_pool", "secgroup_pool",
+        "vdc_pool", "vrouter_pool", "marketplace_pool",
+        "marketplaceapp_pool"].freeze
 
-        ########################################################################
-        # Acl
-        ########################################################################
+    FEDERATED_TABLES = ["group_pool", "user_pool", "acl", "zone_pool",
+        "vdc_pool", "marketplace_pool", "marketplaceapp_pool"].freeze
 
-        ########################################################################
-        # Users
-        #
-        # USER/GNAME
-        ########################################################################
+    def tables
+        TABLES
+    end
 
-        ########################################################################
-        # Datastore
-        #
-        # DATASTORE/UID
-        # DATASTORE/UNAME
-        # DATASTORE/GID
-        # DATASTORE/GNAME
-        # DATASTORE/SYSTEM ??
-        ########################################################################
+    def federated_tables
+        FEDERATED_TABLES
+    end
 
-        ########################################################################
-        # VM Template
-        #
-        # VMTEMPLATE/UID
-        # VMTEMPLATE/UNAME
-        # VMTEMPLATE/GID
-        # VMTEMPLATE/GNAME
-        ########################################################################
 
-        ########################################################################
-        # Documents
-        #
-        # DOCUMENT/UID
-        # DOCUMENT/UNAME
-        # DOCUMENT/GID
-        # DOCUMENT/GNAME
-        ########################################################################
-
-        ########################################################################
-        # VM
-        #
-        # VM/UID
-        # VM/UNAME
-        # VM/GID
-        # VM/GNAME
-        #
-        # VM/STATE        <--- Check transitioning states?
-        # VM/LCM_STATE    <---- Check consistency state/lcm_state ?
-        ########################################################################
-
-        ########################################################################
-        # Image
-        #
-        # IMAGE/UID
-        # IMAGE/UNAME
-        # IMAGE/GID
-        # IMAGE/GNAME
-        ########################################################################
-
-        ########################################################################
-        # VNet
-        #
-        # VNET/UID
-        # VNET/UNAME
-        # VNET/GID
-        # VNET/GNAME
-        ########################################################################
-
-        init_log_time()
-
-        @errors = 0
-        @repaired_errors = 0
-        @unrepaired_errors = 0
-
-        puts
-
-        db_version = read_db_version()
-
-        ########################################################################
-        # pool_control
-        ########################################################################
-
-        tables = ["group_pool", "user_pool", "acl", "image_pool", "host_pool",
-            "network_pool", "template_pool", "vm_pool", "cluster_pool",
-            "datastore_pool", "document_pool", "zone_pool", "secgroup_pool",
-            "vdc_pool", "vrouter_pool", "marketplace_pool", "marketplaceapp_pool"]
-
-        federated_tables = ["group_pool", "user_pool", "acl", "zone_pool",
-            "vdc_pool", "marketplace_pool", "marketplaceapp_pool"]
-
+    def check_pool_control
         tables.each do |table|
             max_oid = -1
 
@@ -197,21 +132,9 @@ EOT
                 end
             end
         end
+    end
 
-        log_time()
-
-        ########################################################################
-        # Groups
-        #
-        # GROUP/USERS/ID
-        ########################################################################
-
-        ########################################################################
-        # Users
-        #
-        # USER/GID
-        ########################################################################
-
+    def check_users_groups
         group = {}
 
         @db.fetch("SELECT oid FROM group_pool") do |row|
@@ -350,6 +273,110 @@ EOT
         elsif !groups_fix.empty?
             log_msg("^ Group errors need to be fixed in the master OpenNebula")
         end
+    end
+
+
+    ########################################################################
+    # Acl
+    ########################################################################
+
+    ########################################################################
+    # Users
+    #
+    # USER/GNAME
+    ########################################################################
+
+    ########################################################################
+    # Datastore
+    #
+    # DATASTORE/UID
+    # DATASTORE/UNAME
+    # DATASTORE/GID
+    # DATASTORE/GNAME
+    # DATASTORE/SYSTEM ??
+    ########################################################################
+
+    ########################################################################
+    # VM Template
+    #
+    # VMTEMPLATE/UID
+    # VMTEMPLATE/UNAME
+    # VMTEMPLATE/GID
+    # VMTEMPLATE/GNAME
+    ########################################################################
+
+    ########################################################################
+    # Documents
+    #
+    # DOCUMENT/UID
+    # DOCUMENT/UNAME
+    # DOCUMENT/GID
+    # DOCUMENT/GNAME
+    ########################################################################
+
+    ########################################################################
+    # VM
+    #
+    # VM/UID
+    # VM/UNAME
+    # VM/GID
+    # VM/GNAME
+    #
+    # VM/STATE        <--- Check transitioning states?
+    # VM/LCM_STATE    <---- Check consistency state/lcm_state ?
+    ########################################################################
+
+    ########################################################################
+    # Image
+    #
+    # IMAGE/UID
+    # IMAGE/UNAME
+    # IMAGE/GID
+    # IMAGE/GNAME
+    ########################################################################
+
+    ########################################################################
+    # VNet
+    #
+    # VNET/UID
+    # VNET/UNAME
+    # VNET/GID
+    # VNET/GNAME
+    ########################################################################
+
+    def fsck
+        init_log_time()
+
+        @errors = 0
+        @repaired_errors = 0
+        @unrepaired_errors = 0
+
+        puts
+
+        db_version = read_db_version()
+
+        ########################################################################
+        # pool_control
+        ########################################################################
+
+
+        check_pool_control()
+
+        log_time()
+
+        ########################################################################
+        # Groups
+        #
+        # GROUP/USERS/ID
+        ########################################################################
+
+        ########################################################################
+        # Users
+        #
+        # USER/GID
+        ########################################################################
+
+        check_users_groups()
 
         log_time()
 
