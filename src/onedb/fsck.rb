@@ -29,6 +29,9 @@ require 'set'
 
 require 'nokogiri'
 
+require 'opennebula'
+include OpenNebula
+
 module OneDBFsck
     VERSION = "5.2.0"
     LOCAL_VERSION = "5.3.80"
@@ -56,8 +59,6 @@ EOT
     def db_version
         one_version()
     end
-
-    IMAGE_STATES=%w{INIT READY USED DISABLED LOCKED ERROR CLONE DELETE USED_PERS}
 
     VM_BIN      = 0x0000001000000000
     NET_BIN     = 0x0000004000000000
@@ -1585,7 +1586,9 @@ EOT
 
                 doc.root.each_element("STATE") { |e|
                     if e.text != state.to_s
-                        log_error("Image #{oid} has STATE #{IMAGE_STATES[e.text.to_i]} \tis\t#{IMAGE_STATES[state]}")
+                        log_error("Image #{oid} has STATE " <<
+                                  Image::IMAGE_STATES[e.text.to_i] <<
+                                  " \tis\t#{Image::IMAGE_STATES[state]}")
                         e.text = state
                     end
                 }
