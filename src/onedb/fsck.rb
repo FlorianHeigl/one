@@ -81,12 +81,60 @@ EOT
     FEDERATED_TABLES = ["group_pool", "user_pool", "acl", "zone_pool",
         "vdc_pool", "marketplace_pool", "marketplaceapp_pool"].freeze
 
+    SCHEMA = {
+        cluster_pool: "oid INTEGER PRIMARY KEY, name VARCHAR(128), " <<
+            "body MEDIUMTEXT, uid INTEGER, gid INTEGER, owner_u INTEGER, " <<
+            "group_u INTEGER, other_u INTEGER, UNIQUE(name)",
+        cluster_datastore_relation: "cid INTEGER, oid INTEGER, " <<
+            "PRIMARY KEY(cid, oid)",
+        cluster_network_relation: "cid INTEGER, oid INTEGER, " <<
+            "PRIMARY KEY(cid, oid)",
+        datastore_pool: "oid INTEGER PRIMARY KEY, name VARCHAR(128), " <<
+            "body MEDIUMTEXT, uid INTEGER, gid INTEGER, owner_u INTEGER, " <<
+            "group_u INTEGER, other_u INTEGER",
+        cluster_vnc_bitmap: "id INTEGER, map LONGTEXT, PRIMARY KEY(id)",
+        host_pool: "oid INTEGER PRIMARY KEY, " <<
+            "name VARCHAR(128), body MEDIUMTEXT, state INTEGER, " <<
+            "last_mon_time INTEGER, uid INTEGER, gid INTEGER, " <<
+            "owner_u INTEGER, group_u INTEGER, other_u INTEGER, " <<
+            "cid INTEGER",
+        image_pool: "oid INTEGER PRIMARY KEY, name VARCHAR(128), " <<
+            "body MEDIUMTEXT, uid INTEGER, gid INTEGER, owner_u INTEGER, " <<
+            "group_u INTEGER, other_u INTEGER, UNIQUE(name,uid)",
+        network_pool: "oid INTEGER PRIMARY KEY, name VARCHAR(128), " <<
+            "body MEDIUMTEXT, uid INTEGER, gid INTEGER, owner_u INTEGER, " <<
+            "group_u INTEGER, other_u INTEGER, pid INTEGER, UNIQUE(name,uid)",
+        user_quotas: "user_oid INTEGER PRIMARY KEY, body MEDIUMTEXT",
+        group_quotas: "group_oid INTEGER PRIMARY KEY, body MEDIUMTEXT"
+    }
+
     def tables
         TABLES
     end
 
     def federated_tables
         FEDERATED_TABLES
+    end
+
+    def create_table(type, name = nil)
+        if name
+            n = name.to_s
+        else
+            n = type.to_s
+        end
+
+        schema = SCHEMA[type]
+
+        if !schema
+            STDERR.puts "Schema not found (#{type})"
+            exit(-1)
+        end
+
+        sql = "CREATE TABLE #{n} (#{schema});"
+
+        STDERR.puts sql
+
+        @db.run sql
     end
 
 
@@ -394,7 +442,7 @@ EOT
 
         log_time()
 
-        @db.run "CREATE TABLE cluster_pool_new (oid INTEGER PRIMARY KEY, name VARCHAR(128), body MEDIUMTEXT, uid INTEGER, gid INTEGER, owner_u INTEGER, group_u INTEGER, other_u INTEGER, UNIQUE(name));"
+        create_table(:cluster_pool, :cluster_pool_new)
 
         @db.transaction do
             @db.fetch("SELECT * from cluster_pool") do |row|
@@ -485,7 +533,8 @@ EOT
         log_time()
 
         @db.transaction do
-            @db.run "CREATE TABLE cluster_datastore_relation_new (cid INTEGER, oid INTEGER, PRIMARY KEY(cid, oid));"
+            create_table(:cluster_datastore_relation,
+                         :cluster_datastore_relation_new)
 
             @db.fetch("SELECT * from cluster_datastore_relation") do |row|
                 if (cluster[row[:cid]][:datastores].count(row[:oid]) != 1)
@@ -502,7 +551,8 @@ EOT
         log_time()
 
         @db.transaction do
-            @db.run "CREATE TABLE cluster_network_relation_new (cid INTEGER, oid INTEGER, PRIMARY KEY(cid, oid));"
+            create_table(:cluster_network_relation,
+                         :cluster_network_relation_new)
 
             @db.fetch("SELECT * from cluster_network_relation") do |row|
                 if (cluster[row[:cid]][:vnets].count(row[:oid]) != 1)
@@ -566,7 +616,7 @@ EOT
 
         log_time()
 
-        @db.run "CREATE TABLE datastore_pool_new (oid INTEGER PRIMARY KEY, name VARCHAR(128), body MEDIUMTEXT, uid INTEGER, gid INTEGER, owner_u INTEGER, group_u INTEGER, other_u INTEGER);"
+        create_table(:datastore_pool, :datastore_pool_new)
 
         @db.transaction do
             @db.fetch("SELECT * from datastore_pool") do |row|
@@ -1018,7 +1068,7 @@ EOT
 
         # Re-create cluster_vnc_bitmap table
         @db.run("ALTER TABLE cluster_vnc_bitmap RENAME TO old_cluster_vnc_bitmap")
-        @db.run("CREATE TABLE cluster_vnc_bitmap (id INTEGER, map LONGTEXT, PRIMARY KEY(id));")
+        create_table(:cluster_vnc_bitmap)
 
         vnc_pool_size = 65536
 
@@ -1236,11 +1286,7 @@ EOT
         ########################################################################
 
         # Create a new empty table where we will store the new calculated values
-        @db.run "CREATE TABLE host_pool_new (oid INTEGER PRIMARY KEY, " <<
-                "name VARCHAR(128), body MEDIUMTEXT, state INTEGER, " <<
-                "last_mon_time INTEGER, uid INTEGER, gid INTEGER, " <<
-                "owner_u INTEGER, group_u INTEGER, other_u INTEGER, " <<
-                "cid INTEGER);"
+        create_table(:host_pool, :host_pool_new)
 
         # Calculate the host's xml and write them to host_pool_new
         @db.transaction do
@@ -1494,7 +1540,7 @@ EOT
         ########################################################################
 
         # Create a new empty table where we will store the new calculated values
-        @db.run "CREATE TABLE image_pool_new (oid INTEGER PRIMARY KEY, name VARCHAR(128), body MEDIUMTEXT, uid INTEGER, gid INTEGER, owner_u INTEGER, group_u INTEGER, other_u INTEGER, UNIQUE(name,uid) );"
+        create_table(:image_pool, :image_pool_new)
 
         @db.transaction do
             @db[:image_pool].each do |row|
@@ -1750,7 +1796,7 @@ EOT
 
 
         # Create a new empty table where we will store the new calculated values
-        @db.run "CREATE TABLE network_pool_new (oid INTEGER PRIMARY KEY, name VARCHAR(128), body MEDIUMTEXT, uid INTEGER, gid INTEGER, owner_u INTEGER, group_u INTEGER, other_u INTEGER, pid INTEGER, UNIQUE(name,uid));"
+        create_table(:network_pool, :network_pool_new)
 
         @db.transaction do
         @db[:network_pool].each do |row|
@@ -2074,7 +2120,7 @@ EOT
         end
 =end
         @db.run "ALTER TABLE user_quotas RENAME TO old_user_quotas;"
-        @db.run "CREATE TABLE user_quotas (user_oid INTEGER PRIMARY KEY, body MEDIUMTEXT);"
+        create_table(:user_quotas)
 
         @db.transaction do
             # oneadmin does not have quotas
@@ -2122,7 +2168,7 @@ EOT
         end
 =end
         @db.run "ALTER TABLE group_quotas RENAME TO old_group_quotas;"
-        @db.run "CREATE TABLE group_quotas (group_oid INTEGER PRIMARY KEY, body MEDIUMTEXT);"
+        create_table(:group_quotas)
 
         @db.transaction do
             # oneadmin does not have quotas
