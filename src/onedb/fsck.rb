@@ -726,6 +726,87 @@ EOT
     # VNET/GNAME
     ########################################################################
 
+
+    def counters
+        if !defined?(@counters)
+            @counters = {}
+            @counters[:host]  = {}
+            @counters[:image] = {}
+            @counters[:vnet]  = {}
+            @counters[:vrouter]  = {}
+        end
+
+        @counters
+    end
+
+    # Initialize all the host counters to 0
+    def init_host_counters
+        @db.fetch("SELECT oid, name FROM host_pool") do |row|
+            counters[:host][row[:oid]] = {
+                :name   => row[:name],
+                :memory => 0,
+                :cpu    => 0,
+                :rvms   => Set.new
+            }
+        end
+    end
+
+    # Init image counters
+    def init_image_counters
+        @db.fetch("SELECT oid,body FROM image_pool") do |row|
+            if counters[:image][row[:oid]].nil?
+                counters[:image][row[:oid]] = {
+                    :vms        => Set.new,
+                    :clones     => Set.new,
+                    :app_clones => Set.new
+                }
+            end
+
+            doc = Document.new(row[:body])
+
+            doc.root.each_element("CLONING_ID") do |e|
+                img_id = e.text.to_i
+
+                if counters[:image][img_id].nil?
+                    counters[:image][img_id] = {
+                        :vms        => Set.new,
+                        :clones     => Set.new,
+                        :app_clones => Set.new
+                    }
+                end
+
+                counters[:image][img_id][:clones].add(row[:oid])
+            end
+        end
+    end
+
+    # Init vnet counters
+    def init_vnet_counters
+        @db.fetch("SELECT oid,body FROM network_pool") do |row|
+            doc = Nokogiri::XML(row[:body],nil,NOKOGIRI_ENCODING){|c| c.default_xml.noblanks}
+
+            ar_leases = {}
+
+            doc.root.xpath("AR_POOL/AR/AR_ID").each do |ar_id|
+                ar_leases[ar_id.text.to_i] = {}
+            end
+
+            counters[:vnet][row[:oid]] = {
+                :ar_leases      => ar_leases,
+                :no_ar_leases   => {}
+            }
+        end
+    end
+
+    # Initialize all the vrouter counters to 0
+    def init_vrouter_counters
+        @db.fetch("SELECT oid FROM vrouter_pool") do |row|
+            counters[:vrouter][row[:oid]] = {
+                :vms   => Set.new
+            }
+        end
+    end
+
     def fsck
         init_log_time()
 
@@ -809,77 +890,20 @@ EOT
         # VM Counters for host, image and vnet usage
         ########################################################################
 
-        counters = {}
-        counters[:host]  = {}
-        counters[:image] = {}
-        counters[:vnet]  = {}
-        counters[:vrouter]  = {}
 
-        # Initialize all the host counters to 0
-        @db.fetch("SELECT oid, name FROM host_pool") do |row|
-            counters[:host][row[:oid]] = {
-                :name   => row[:name],
-                :memory => 0,
-                :cpu    => 0,
-                :rvms   => Set.new
-            }
-        end
+        init_host_counters()
 
         log_time()
 
-        # Init image counters
-        @db.fetch("SELECT oid,body FROM image_pool") do |row|
-            if counters[:image][row[:oid]].nil?
-                counters[:image][row[:oid]] = {
-                    :vms        => Set.new,
-                    :clones     => Set.new,
-                    :app_clones => Set.new
-                }
-            end
-
-            doc = Document.new(row[:body])
-
-            doc.root.each_element("CLONING_ID") do |e|
-                img_id = e.text.to_i
-
-                if counters[:image][img_id].nil?
-                    counters[:image][img_id] = {
-                        :vms        => Set.new,
-                        :clones     => Set.new,
-                        :app_clones => Set.new
-                    }
-                end
-
-                counters[:image][img_id][:clones].add(row[:oid])
-            end
-        end
+        init_image_counters()
 
         log_time()
 
-        # Init vnet counters
-        @db.fetch("SELECT oid,body FROM network_pool") do |row|
-            doc = Nokogiri::XML(row[:body],nil,NOKOGIRI_ENCODING){|c| c.default_xml.noblanks}
-
-            ar_leases = {}
-
-            doc.root.xpath("AR_POOL/AR/AR_ID").each do |ar_id|
-                ar_leases[ar_id.text.to_i] = {}
-            end
-
-            counters[:vnet][row[:oid]] = {
-                :ar_leases      => ar_leases,
-                :no_ar_leases   => {}
-            }
-        end
+        init_vnet_counters()
 
         log_time()
 
-        # Initialize all the vrouter counters to 0
-        @db.fetch("SELECT oid FROM vrouter_pool") do |row|
-            counters[:vrouter][row[:oid]] = {
-                :vms   => Set.new
-            }
-        end
+        init_vrouter_counters()
 
         log_time()
 
