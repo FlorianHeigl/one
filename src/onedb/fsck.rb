@@ -910,7 +910,7 @@ EOT
         vms_fix = {}
         cluster_vnc = {}
 
-        # Aggregate information of the RUNNING vms
+        # DATA: Aggregate information of the RUNNING vms
         @db.transaction do
         @db.fetch("SELECT oid,body FROM vm_pool WHERE state<>6") do |row|
             vm_doc = Nokogiri::XML(row[:body],nil,NOKOGIRI_ENCODING){|c| c.default_xml.noblanks}
@@ -918,16 +918,17 @@ EOT
             state     = vm_doc.root.at_xpath('STATE').text.to_i
             lcm_state = vm_doc.root.at_xpath('LCM_STATE').text.to_i
 
-            # VNC ports per cluster
+            # DATA: VNC ports per cluster
             cid = vm_doc.root.at_xpath("HISTORY_RECORDS/HISTORY[last()]/CID").text.to_i rescue nil
             port = vm_doc.root.at_xpath('TEMPLATE/GRAPHICS[translate(TYPE,"vnc","VNC")="VNC"]/PORT').text.to_i rescue nil
+            # DATA: TODO: get also spice port
 
             if cid && port
                 cluster_vnc[cid] ||= Set.new
                 cluster_vnc[cid] << port
             end
 
-            # Images used by this VM
+            # DATA: Images used by this VM
             vm_doc.root.xpath("TEMPLATE/DISK/IMAGE_ID").each do |e|
                 img_id = e.text.to_i
 
@@ -939,7 +940,7 @@ EOT
                 end
             end
 
-            # VNets used by this VM
+            # DATA: VNets used by this VM
             vm_doc.root.xpath("TEMPLATE/NIC").each do |nic|
                 net_id = nil
                 nic.xpath("NETWORK_ID").each do |nid|
@@ -961,6 +962,7 @@ EOT
                                     "FSCK can't handle this, and consistency is not guaranteed", false)
                             end
 
+                            # DATA: IPs per network no ar
                             counters[:vnet][net_id][:no_ar_leases][mac_s_to_i(mac)] = {
                                 :ip         => nic.at_xpath("IP").nil? ? nil : nic.at_xpath("IP").text,
                                 :ip6_global => nic.at_xpath("IP6_GLOBAL").nil? ? nil : nic.at_xpath("IP6_GLOBAL").text,
@@ -977,7 +979,9 @@ EOT
                             if counters[:vnet][net_id][:ar_leases][ar_id].nil?
                                 log_error("VM #{row[:oid]} is using VNet #{net_id}, AR #{ar_id}, "<<
                                     "but the AR does not exist", false)
+                                # DATA: why these are not added to counters?
                             else
+                                # DATA: IPs per network with ar
                                 counters[:vnet][net_id][:ar_leases][ar_id][mac_s_to_i(mac)] = {
                                     :ip         => nic.at_xpath("IP").nil? ? nil : nic.at_xpath("IP").text,
                                     :ip6_global => nic.at_xpath("IP6_GLOBAL").nil? ? nil : nic.at_xpath("IP6_GLOBAL").text,
@@ -997,6 +1001,7 @@ EOT
             # See if it's part of a Virtual Router
             vrouter_e = vm_doc.root.at_xpath("TEMPLATE/VROUTER_ID")
 
+            # DATA: add vrouter counters
             if !vrouter_e.nil?
                 vr_id = vrouter_e.text.to_i
                 counters_vrouter = counters[:vrouter][vr_id]
@@ -1009,19 +1014,19 @@ EOT
                 end
             end
 
-            # Host resources
+            # DATA: Host resources
 
             # Only states that add to Host resources consumption are
             # ACTIVE, SUSPENDED, POWEROFF
             next if !([3,5,8].include? state)
 
-            # Get memory (integer)
+            # DATA: Get memory (integer)
             memory = vm_doc.root.at_xpath("TEMPLATE/MEMORY").text.to_i
 
-            # Get CPU (float)
+            # DATA: Get CPU (float)
             cpu = vm_doc.root.at_xpath("TEMPLATE/CPU").text.to_f
 
-            # Get hostid, hostname
+            # DATA: Get hostid, hostname
             hid = -1
             vm_doc.root.xpath("HISTORY_RECORDS/HISTORY[last()]/HID").each { |e|
                 hid = e.text.to_i
@@ -1038,6 +1043,7 @@ EOT
                 log_error("VM #{row[:oid]} is using Host #{hid}, "<<
                     "but it does not exist", false)
             else
+                # DATA: FIX: hostname is wrong, fix inline
                 if counters_host[:name] != hostname
                     log_error("VM #{row[:oid]} has a wrong hostname for "<<
                         "Host #{hid}, #{hostname}. It will be changed to "<<
@@ -1051,11 +1057,13 @@ EOT
                     vms_fix[row[:oid]] = vm_doc.root.to_s
                 end
 
+                # DATA: add resources to host counters
                 counters_host[:memory] += memory
                 counters_host[:cpu]    += cpu
                 counters_host[:rvms].add(row[:oid])
             end
 
+            # DATA: search history for VMMMAD and TMMAD to translate
             @db.fetch("SELECT * FROM history WHERE vid=#{row[:oid]}") do |hrow|
                 hdoc = Nokogiri::XML(hrow[:body],nil,NOKOGIRI_ENCODING){|c| c.default_xml.noblanks}
 
@@ -1072,6 +1080,7 @@ EOT
                     found = true
                 }
 
+                # DATA: translate VMMMAD and TMMAD to VM_MAD and TM_MAD
                 if found
                     @db[:history].where(:vid => hrow[:vid], :seq => hrow[:seq]).update(
                         :body => hdoc.root.to_s)
@@ -1080,6 +1089,7 @@ EOT
         end
         end
 
+        # DATA: FIX: do vm_pool fixes
         @db.transaction do
             vms_fix.each do |id, body|
                 @db[:vm_pool].where(:oid => id).update(:body => body)
@@ -1088,9 +1098,9 @@ EOT
 
         log_time()
 
-        # VNC Bitmap
+        # DATA: VNC Bitmap
 
-        # Re-create cluster_vnc_bitmap table
+        # DATA: FIX: Re-create cluster_vnc_bitmap table
         @db.run("ALTER TABLE cluster_vnc_bitmap RENAME TO old_cluster_vnc_bitmap")
         create_table(:cluster_vnc_bitmap)
 
@@ -1117,6 +1127,7 @@ EOT
                 log_error("Cluster #{cluster_id} has not the proper reserved VNC ports")
             end
 
+            # DATA: add new vnc bitmap
             @db[:cluster_vnc_bitmap].insert(
               :id  => cluster_id,
               :map => map_encoded
@@ -1127,6 +1138,8 @@ EOT
         @db.run("DROP TABLE old_cluster_vnc_bitmap")
 
         log_time()
+
+        # DATA: check history etime
 
         # Bug #4000 may cause history records with etime=0 when they should
         # be closed. The last history can be fixed with the VM etime, but
@@ -1142,6 +1155,9 @@ EOT
         log_time()
 
         history_fix = []
+
+        # DATA: go through all bad history records (etime=0) and ask
+        # DATA: new time values to fix them
 
         # Query to select history elements that have:
         #   - etime = 0
@@ -1173,6 +1189,8 @@ EOT
             history_fix.push(row)
         end
 
+        # DATA: FIX: update history records with fixed data
+        # DATA: TODO: check all fixes to always do the same (update vs rewrite)
         @db.transaction do
             history_fix.each do |row|
                 @db[:history].where({:vid => row[:vid], :seq => row[:seq]}).update(row)
@@ -1189,11 +1207,11 @@ EOT
 
         vrouters_fix = {}
 
-        # Aggregate information of the RUNNING vms
+        # DATA: Aggregate information of the RUNNING vms
         @db.fetch("SELECT oid,body FROM vrouter_pool") do |row|
             vrouter_doc = Nokogiri::XML(row[:body],nil,NOKOGIRI_ENCODING){|c| c.default_xml.noblanks}
 
-            # VNets used by this Virtual Router
+            # DATA: VNets used by this Virtual Router
             vrouter_doc.root.xpath("TEMPLATE/NIC").each do |nic|
                 net_id = nil
                 nic.xpath("NETWORK_ID").each do |nid|
@@ -1211,6 +1229,7 @@ EOT
                         log_error("VRouter #{row[:oid]} is using VNet #{net_id}, "<<
                             "but it does not exist", false)
                     else
+                        # DATA: this part is copied from "VNets used by this VM"
                         mac = nic.at_xpath("MAC").nil? ? nil : nic.at_xpath("MAC").text
 
                         ar_id_e = nic.at_xpath('AR_ID')
@@ -1254,7 +1273,7 @@ EOT
                 end
             end
 
-            # re-do list of VM IDs
+            # DATA: re-do list of VM IDs per vrouter
             error = false
 
             counters_vrouter = counters[:vrouter][row[:oid]]
@@ -1292,6 +1311,7 @@ EOT
             end
         end
 
+        # DATA: FIX: update vrouter_pool with regenerated documents (ids)
         @db.transaction do
             vrouters_fix.each do |id, body|
                 @db[:vrouter_pool].where(:oid => id).update(:body => body)
@@ -1301,7 +1321,7 @@ EOT
         log_time()
 
         ########################################################################
-        # Hosts
+        # DATA: Hosts
         #
         # HOST/HOST_SHARE/MEM_USAGE
         # HOST/HOST_SHARE/CPU_USAGE
@@ -1309,10 +1329,10 @@ EOT
         # HOST/VMS/ID
         ########################################################################
 
-        # Create a new empty table where we will store the new calculated values
+        # DATA: Create a new empty table where we will store the new calculated values
         create_table(:host_pool, :host_pool_new)
 
-        # Calculate the host's xml and write them to host_pool_new
+        # DATA: FIX: Calculate the host's xml and write them to host_pool_new
         @db.transaction do
             @db[:host_pool].each do |row|
                 host_doc = Nokogiri::XML(row[:body],nil,NOKOGIRI_ENCODING){|c| c.default_xml.noblanks}
@@ -1404,11 +1424,11 @@ EOT
         log_time()
 
         ########################################################################
-        # Marketplace
+        # DATA: Marketplace
         #
         # MARKETPLACE/MARKETPLACEAPPS/ID
         ########################################################################
-        # App
+        # DATA: App
         #
         # MARKETPLACEAPP/MARKETPLACE_ID
         # MARKETPLACEAPP/MARKETPLACE
@@ -1417,12 +1437,14 @@ EOT
 
         marketplace = {}
 
+        # DATA: create marketplace hash with its name and empty apps array
         @db.fetch("SELECT oid, name FROM marketplace_pool") do |row|
             marketplace[row[:oid]] = {:name => row[:name], :apps => []}
         end
 
         apps_fix = {}
 
+        # DATA: go through all apps
         @db.fetch("SELECT oid,body FROM marketplaceapp_pool") do |row|
             doc = Document.new(row[:body])
 
@@ -1430,11 +1452,12 @@ EOT
             market_name = doc.root.get_text('MARKETPLACE')
 
             ####################################################################
-            # TODO, BUG: this code will only work for a standalone oned.
+            # DATA: TODO, BUG: this code will only work for a standalone oned.
             # In a federation, the image ID will refer to a different image
             # in each zone
             ####################################################################
 
+            # DATA: get image origin id. Does it work?
             origin_id = doc.root.get_text('ORIGIN_ID').to_s.to_i
             if origin_id >= 0 && doc.root.get_text('STATE').to_s.to_i == 2 # LOCKED
                 counters[:image][origin_id][:app_clones].add(row[:oid])
@@ -1446,12 +1469,14 @@ EOT
             if market_id != -1
                 market_entry = marketplace[market_id]
 
+                # DATA: CHECK: does marketplace for this app exist?
                 if market_entry.nil?
                     log_error("Marketplace App #{row[:oid]} has marketplace #{market_id}, but it does not exist. The app is probably unusable, and needs to be deleted manually:\n"<<
                         "  * The DB entry can be deleted with the command:\n"<<
                         "    DELETE FROM marketplaceapp_pool WHERE oid=#{row[:oid]};\n"<<
                         "  * Run fsck again.\n", false)
                 else
+                    # DATA: CHECK: marketplace name is correct
                     if market_name != market_entry[:name]
                         log_error("Marketplace App #{row[:oid]} has a wrong name for marketplace #{market_id}, #{market_name}. It will be changed to #{market_entry[:name]}")
 
@@ -1462,11 +1487,13 @@ EOT
                         apps_fix[row[:oid]] = doc.root.to_s
                     end
 
+                    # DATA: Add app to marketplace list. Used in marketplace check
                     market_entry[:apps] << row[:oid]
                 end
             end
         end
 
+        # DATA: FIX: fix marketplace app data
         if !db_version[:is_slave]
             @db.transaction do
                 apps_fix.each do |id, body|
@@ -1481,6 +1508,7 @@ EOT
 
         markets_fix = {}
 
+        # DATA: check marketplace pool
         @db.fetch("SELECT oid,body FROM marketplace_pool") do |row|
             market_id = row[:oid]
             doc = Nokogiri::XML(row[:body],nil,NOKOGIRI_ENCODING){|c| c.default_xml.noblanks}
@@ -1493,6 +1521,7 @@ EOT
 
             error = false
 
+            # DATA: CHECK: are all apps in the marketplace?
             marketplace[market_id][:apps].each do |id|
                 id_elem = apps_elem.at_xpath("ID[.=#{id}]")
 
@@ -1509,6 +1538,7 @@ EOT
                 apps_new_elem.add_child(doc.create_element("ID")).content = id.to_s
             end
 
+            # DATA: CHECK: listed apps that don't belong to the marketplace
             apps_elem.xpath("ID").each do |id_elem|
                 error = true
 
@@ -1519,6 +1549,7 @@ EOT
 
             zone_elem = doc.root.at_xpath("ZONE_ID")
 
+            # DATA: CHECK: zone id
             if (zone_elem.nil? || zone_elem.text == "-1")
                 error = true
 
@@ -1536,6 +1567,7 @@ EOT
             end
         end
 
+        # DATA: FIX: update each marketplace that needs fixing
         if !db_version[:is_slave]
             @db.transaction do
                 markets_fix.each do |id, body|
@@ -1549,7 +1581,7 @@ EOT
         log_time()
 
         ########################################################################
-        # Image
+        # DATA: Image
         #
         # IMAGE/RUNNING_VMS
         # IMAGE/VMS/ID
@@ -1580,6 +1612,7 @@ EOT
                 rvms          = counters_img[:vms].size
                 n_cloning_ops = counters_img[:clones].size + counters_img[:app_clones].size
 
+                # DATA: CHECK: running vm counter with this image
                 # rewrite running_vms
                 doc.root.each_element("RUNNING_VMS") {|e|
                     if e.text != rvms.to_s
@@ -1593,6 +1626,7 @@ EOT
 
                 vms_new_elem = doc.root.add_element("VMS")
 
+                # DATA: CHECK: running vm list with this image
                 counters_img[:vms].each do |id|
                     id_elem = vms_elem.elements.delete("ID[.=#{id}]")
 
@@ -1614,7 +1648,7 @@ EOT
                     counters_img[:app_clones] = Set.new
                 end
 
-                # Check number of clones
+                # DATA: CHECK: Check number of clones
                 doc.root.each_element("CLONING_OPS") { |e|
                     if e.text != n_cloning_ops.to_s
                         log_error("Image #{oid} CLONING_OPS has #{e.text} \tis\t#{n_cloning_ops}")
