@@ -1661,6 +1661,7 @@ EOT
 
                 clones_new_elem = doc.root.add_element("CLONES")
 
+                # DATA: CHECK: image clones (is it used?)
                 counters_img[:clones].each do |id|
                     id_elem = clones_elem.elements.delete("ID[.=#{id}]")
 
@@ -1680,6 +1681,8 @@ EOT
 
                 clones_new_elem = doc.root.add_element("APP_CLONES")
 
+                # DATA: CHECK: check app clones
+                # DATA: TODO: understand app clones and image clones
                 counters_img[:app_clones].each do |id|
                     id_elem = clones_elem.elements.delete("ID[.=#{id}]")
 
@@ -1695,7 +1698,8 @@ EOT
                 end
 
 
-                # Check state
+                # DATA: Check state
+                # DATA: TODO: Error state is taken into account?
 
                 state = current_state
 
