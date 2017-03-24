@@ -32,6 +32,8 @@ require 'nokogiri'
 require 'opennebula'
 
 require 'fsck/image'
+require 'fsck/marketplaceapp'
+require 'fsck/marketplace'
 
 module OneDBFsck
     VERSION = "5.2.0"
@@ -1408,148 +1410,15 @@ EOT
         # MARKETPLACEAPP/ORIGIN_ID
         ########################################################################
 
-        marketplace = {}
+        do_check_marketplaceapp
 
-        # DATA: create marketplace hash with its name and empty apps array
-        @db.fetch("SELECT oid, name FROM marketplace_pool") do |row|
-            marketplace[row[:oid]] = {:name => row[:name], :apps => []}
-        end
-
-        apps_fix = {}
-
-        # DATA: go through all apps
-        @db.fetch("SELECT oid,body FROM marketplaceapp_pool") do |row|
-            doc = Document.new(row[:body])
-
-            market_id   = doc.root.get_text('MARKETPLACE_ID').to_s.to_i
-            market_name = doc.root.get_text('MARKETPLACE')
-
-            ####################################################################
-            # DATA: TODO, BUG: this code will only work for a standalone oned.
-            # In a federation, the image ID will refer to a different image
-            # in each zone
-            ####################################################################
-
-            # DATA: get image origin id. Does it work?
-            origin_id = doc.root.get_text('ORIGIN_ID').to_s.to_i
-            if origin_id >= 0 && doc.root.get_text('STATE').to_s.to_i == 2 # LOCKED
-                counters[:image][origin_id][:app_clones].add(row[:oid])
-            end
-
-            ####################################################################
-            #####################################################################
-
-            if market_id != -1
-                market_entry = marketplace[market_id]
-
-                # DATA: CHECK: does marketplace for this app exist?
-                if market_entry.nil?
-                    log_error("Marketplace App #{row[:oid]} has marketplace #{market_id}, but it does not exist. The app is probably unusable, and needs to be deleted manually:\n"<<
-                        "  * The DB entry can be deleted with the command:\n"<<
-                        "    DELETE FROM marketplaceapp_pool WHERE oid=#{row[:oid]};\n"<<
-                        "  * Run fsck again.\n", false)
-                else
-                    # DATA: CHECK: marketplace name is correct
-                    if market_name != market_entry[:name]
-                        log_error("Marketplace App #{row[:oid]} has a wrong name for marketplace #{market_id}, #{market_name}. It will be changed to #{market_entry[:name]}")
-
-                        doc.root.each_element('MARKETPLACE') do |e|
-                            e.text = market_entry[:name]
-                        end
-
-                        apps_fix[row[:oid]] = doc.root.to_s
-                    end
-
-                    # DATA: Add app to marketplace list. Used in marketplace check
-                    market_entry[:apps] << row[:oid]
-                end
-            end
-        end
-
-        # DATA: FIX: fix marketplace app data
-        if !db_version[:is_slave]
-            @db.transaction do
-                apps_fix.each do |id, body|
-                    @db[:marketplaceapp_pool].where(:oid => id).update(:body => body)
-                end
-            end
-        elsif !apps_fix.empty?
-            log_msg("^ Marketplace App errors need to be fixed in the master OpenNebula")
-        end
+        do_fix_marketplaceapp
 
         log_time()
 
-        markets_fix = {}
+        do_check_marketplace
 
-        # DATA: check marketplace pool
-        @db.fetch("SELECT oid,body FROM marketplace_pool") do |row|
-            market_id = row[:oid]
-            doc = Nokogiri::XML(row[:body],nil,NOKOGIRI_ENCODING){|c| c.default_xml.noblanks}
-
-            apps_elem = doc.root.at_xpath("MARKETPLACEAPPS")
-            apps_elem.remove if !apps_elem.nil?
-
-            apps_new_elem = doc.create_element("MARKETPLACEAPPS")
-            doc.root.add_child(apps_new_elem)
-
-            error = false
-
-            # DATA: CHECK: are all apps in the marketplace?
-            marketplace[market_id][:apps].each do |id|
-                id_elem = apps_elem.at_xpath("ID[.=#{id}]")
-
-                if id_elem.nil?
-                    error = true
-
-                    log_error(
-                        "Marketplace App #{id} is missing from Marketplace #{market_id} "<<
-                        "app id list")
-                else
-                    id_elem.remove
-                end
-
-                apps_new_elem.add_child(doc.create_element("ID")).content = id.to_s
-            end
-
-            # DATA: CHECK: listed apps that don't belong to the marketplace
-            apps_elem.xpath("ID").each do |id_elem|
-                error = true
-
-                log_error(
-                    "Marketplace App #{id_elem.text} is in Marketplace #{market_id} "<<
-                    "app id list, but it should not")
-            end
-
-            zone_elem = doc.root.at_xpath("ZONE_ID")
-
-            # DATA: CHECK: zone id
-            if (zone_elem.nil? || zone_elem.text == "-1")
-                error = true
-
-                log_error("Marketplace #{market_id} has an invalid ZONE_ID. Will be set to 0")
-
-                if (zone_elem.nil?)
-                    zone_elem = doc.root.add_child(doc.create_element("ZONE_ID"))
-                end
-
-                zone_elem.content = "0"
-            end
-
-            if (error)
-                markets_fix[row[:oid]] = doc.root.to_s
-            end
-        end
-
-        # DATA: FIX: update each marketplace that needs fixing
-        if !db_version[:is_slave]
-            @db.transaction do
-                markets_fix.each do |id, body|
-                    @db[:marketplace_pool].where(:oid => id).update(:body => body)
-                end
-            end
-        elsif !markets_fix.empty?
-            log_msg("^ Marketplace errors need to be fixed in the master OpenNebula")
-        end
+        do_fix_marketplace
 
         log_time()
 
