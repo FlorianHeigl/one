@@ -1410,15 +1410,15 @@ EOT
         # MARKETPLACEAPP/ORIGIN_ID
         ########################################################################
 
-        do_check_marketplaceapp
+        check_marketplaceapp
 
-        do_fix_marketplaceapp
+        fix_marketplaceapp
 
         log_time()
 
-        do_check_marketplace
+        check_marketplace
 
-        do_fix_marketplace
+        fix_marketplace
 
         log_time()
 
@@ -1437,9 +1437,9 @@ EOT
         # IMAGE/STATE
         ########################################################################
 
-        do_check_image
+        check_image
 
-        do_fix_image
+        fix_image
 
         log_time()
 

@@ -5,7 +5,7 @@ module OneDBFsck
     #   @data_marketplaceapp: used also by marketplace check
     #   @fixes_marketplaceapp: used by do_check_marketplaceapp
 
-    def do_check_marketplaceapp
+    def check_marketplaceapp
         @data_marketplaceapp = {
             marketplace: {}
         }
@@ -70,7 +70,7 @@ module OneDBFsck
         end
     end
 
-    def do_fix_marketplaceapp
+    def fix_marketplaceapp
         # DATA: FIX: fix marketplace app data
         if !db_version[:is_slave]
             @db.transaction do

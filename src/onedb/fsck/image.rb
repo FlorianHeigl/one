@@ -29,7 +29,7 @@ module OneDBFsck
         end
     end
 
-    def do_check_image
+    def check_image
         @fixes_image = {}
 
         @db.transaction do
@@ -178,7 +178,7 @@ module OneDBFsck
         end
     end
 
-    def do_fix_image
+    def fix_image
         # # Rename table
         # @db.run("DROP TABLE image_pool")
         # @db.run("ALTER TABLE image_pool_new RENAME TO image_pool")
