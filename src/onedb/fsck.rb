@@ -32,6 +32,9 @@ require 'nokogiri'
 require 'opennebula'
 
 require 'fsck/pool_control'
+require 'fsck/user'
+require 'fsck/group'
+
 require 'fsck/image'
 require 'fsck/marketplaceapp'
 require 'fsck/marketplace'
@@ -140,147 +143,6 @@ EOT
         STDERR.puts sql
 
         @db.run sql
-    end
-
-    def check_users_groups
-        group = {}
-
-        @db.fetch("SELECT oid FROM group_pool") do |row|
-            group[row[:oid]] = []
-        end
-
-        users_fix = {}
-
-        @db.fetch("SELECT oid,body,gid FROM user_pool") do |row|
-            doc = Nokogiri::XML(row[:body],nil,NOKOGIRI_ENCODING){|c| c.default_xml.noblanks}
-
-            gid = doc.root.at_xpath('GID').text.to_i
-            user_gid = gid
-            user_gids = Set.new
-
-            if group[gid].nil?
-                log_error("User #{row[:oid]} has primary group #{gid}, but it does not exist", !db_version[:is_slave])
-
-                user_gid = 1
-
-                doc.root.xpath('GID').each do |e|
-                    e.content = "1"
-                end
-
-                doc.root.xpath('GNAME').each do |e|
-                    e.content = "users"
-                end
-
-                doc.root.xpath("GROUPS").each { |e|
-                    e.xpath("ID[.=#{gid}]").each{|x| x.remove}
-
-                    e.add_child(doc.create_element("ID")).content = user_gid.to_s
-                }
-
-                users_fix[row[:oid]] = {:body => doc.root.to_s, :gid => user_gid}
-            end
-
-            doc.root.xpath("GROUPS/ID").each { |e|
-                user_gids.add e.text.to_i
-            }
-
-            if !user_gids.include?(user_gid)
-                log_error("User #{row[:oid]} does not have his primary group #{user_gid} in the list of secondary groups", !db_version[:is_slave])
-
-                doc.root.xpath("GROUPS").each { |e|
-                    e.add_child(doc.create_element("ID")).content = user_gid.to_s
-                }
-
-                user_gids.add user_gid.to_i
-
-                users_fix[row[:oid]] = {:body => doc.root.to_s, :gid => user_gid}
-            end
-
-            user_gids.each do |secondary_gid|
-                if group[secondary_gid].nil?
-                    log_error("User #{row[:oid]} has secondary group #{secondary_gid}, but it does not exist", !db_version[:is_slave])
-
-                    doc.root.xpath("GROUPS").each { |e|
-                        e.xpath("ID[.=#{secondary_gid}]").each{|x| x.remove}
-                    }
-
-                    users_fix[row[:oid]] = {:body => doc.root.to_s, :gid => user_gid}
-                else
-                    group[secondary_gid] << row[:oid]
-                end
-            end
-
-            if gid != row[:gid]
-                log_error(
-                    "User #{row[:oid]} is in group #{gid}, but the DB "<<
-                    "table has GID column #{row[:gid]}", !db_version[:is_slave])
-
-                users_fix[row[:oid]] = {:body => doc.root.to_s, :gid => user_gid}
-            end
-        end
-
-        if !db_version[:is_slave]
-            @db.transaction do
-                users_fix.each do |id, user|
-                    @db[:user_pool].where(:oid => id).update(
-                        :body => user[:body],
-                        :gid => user[:gid])
-                end
-            end
-        elsif !users_fix.empty?
-            log_msg("^ User errors need to be fixed in the master OpenNebula")
-        end
-
-        log_time()
-
-        groups_fix = {}
-
-        @db.fetch("SELECT oid,body from group_pool") do |row|
-            gid = row[:oid]
-            doc = Nokogiri::XML(row[:body],nil,NOKOGIRI_ENCODING){|c| c.default_xml.noblanks}
-
-            users_elem = doc.root.at_xpath("USERS")
-            users_elem.remove if !users_elem.nil?
-
-            users_new_elem = doc.create_element("USERS")
-            doc.root.add_child(users_new_elem)
-
-            error_found = false
-
-            group[gid].each do |id|
-                id_elem = users_elem.at_xpath("ID[.=#{id}]")
-
-                if id_elem.nil?
-                    log_error("User #{id} is missing from Group #{gid} users id list", !db_version[:is_slave])
-                    error_found = true
-                else
-                    id_elem.remove
-                end
-
-                users_new_elem.add_child(doc.create_element("ID")).content = id.to_s
-            end
-
-            users_elem.xpath("ID").each do |id_elem|
-                log_error("User #{id_elem.text} is in Group #{gid} users id list, but it should not", !db_version[:is_slave])
-                error_found = true
-            end
-
-
-            if error_found
-                groups_fix[row[:oid]] = doc.root.to_s
-            end
-        end
-
-        if !db_version[:is_slave]
-            @db.transaction do
-                groups_fix.each do |id, body|
-                    @db[:group_pool].where(:oid => id).update(
-                        :body => body)
-                end
-            end
-        elsif !groups_fix.empty?
-            log_msg("^ Group errors need to be fixed in the master OpenNebula")
-        end
     end
 
     def check_clusters
@@ -771,9 +633,15 @@ EOT
         # USER/GID
         ########################################################################
 
-        check_users_groups()
+        check_user
+        fix_user
 
-        log_time()
+        log_time
+
+        check_group
+        fix_group
+
+        log_time
 
         ########################################################################
         # Clusters
