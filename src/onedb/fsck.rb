@@ -35,6 +35,11 @@ require 'fsck/pool_control'
 require 'fsck/user'
 require 'fsck/group'
 
+require 'fsck/cluster'
+require 'fsck/host'
+require 'fsck/datastore'
+require 'fsck/network'
+
 require 'fsck/image'
 require 'fsck/marketplaceapp'
 require 'fsck/marketplace'
@@ -145,247 +150,9 @@ EOT
         @db.run sql
     end
 
-    def check_clusters
-        cluster = {}
-
-        @db.fetch("SELECT oid, name FROM cluster_pool") do |row|
-            cluster[row[:oid]] = {}
-
-            cluster[row[:oid]][:name]       = row[:name]
-
-            cluster[row[:oid]][:hosts]      = []
-            cluster[row[:oid]][:datastores] = Set.new
-            cluster[row[:oid]][:vnets]      = Set.new
-        end
-
-        hosts_fix       = {}
-        datastores_fix  = {}
-        vnets_fix       = {}
-
-        @db.transaction do
-            @db.fetch("SELECT oid,body,cid FROM host_pool") do |row|
-                doc = Document.new(row[:body])
-
-                cluster_id = doc.root.get_text('CLUSTER_ID').to_s.to_i
-                cluster_name = doc.root.get_text('CLUSTER')
-
-                if cluster_id != row[:cid]
-                    log_error("Host #{row[:oid]} is in cluster #{cluster_id}, but cid column has cluster #{row[:cid]}")
-                    hosts_fix[row[:oid]] = {:body => row[:body], :cid => cluster_id}
-                end
-
-                if cluster_id != -1
-                    cluster_entry = cluster[cluster_id]
-
-                    if cluster_entry.nil?
-                        log_error("Host #{row[:oid]} is in cluster #{cluster_id}, but it does not exist")
-
-                        doc.root.each_element('CLUSTER_ID') do |e|
-                            e.text = "-1"
-                        end
-
-                        doc.root.each_element('CLUSTER') do |e|
-                            e.text = ""
-                        end
-
-                        hosts_fix[row[:oid]] = {:body => doc.root.to_s, :cid => -1}
-                    else
-                        if cluster_name != cluster_entry[:name]
-                            log_error("Host #{row[:oid]} has a wrong name for cluster #{cluster_id}, #{cluster_name}. It will be changed to #{cluster_entry[:name]}")
-
-                            doc.root.each_element('CLUSTER') do |e|
-                                e.text = cluster_entry[:name]
-                            end
-
-                            hosts_fix[row[:oid]] = {:body => doc.root.to_s, :cid => cluster_id}
-                        end
-
-                        cluster_entry[:hosts] << row[:oid]
-                    end
-                end
-            end
-
-            hosts_fix.each do |id, entry|
-                @db[:host_pool].where(:oid => id).update(:body => entry[:body], :cid => entry[:cid])
-            end
-
-            log_time()
-
-            @db.fetch("SELECT oid,body FROM datastore_pool") do |row|
-                doc = Nokogiri::XML(row[:body],nil,NOKOGIRI_ENCODING){|c| c.default_xml.noblanks}
-
-                doc.root.xpath("CLUSTERS/ID").each do |e|
-                    cluster_id = e.text.to_i
-
-                    cluster_entry = cluster[cluster_id]
-
-                    if cluster_entry.nil?
-                        log_error("Datastore #{row[:oid]} is in cluster #{cluster_id}, but it does not exist")
-
-                        e.remove
-
-                        datastores_fix[row[:oid]] = {:body => doc.root.to_s}
-                    else
-                        cluster_entry[:datastores] << row[:oid]
-                    end
-                end
-            end
-
-            datastores_fix.each do |id, entry|
-                @db[:datastore_pool].where(:oid => id).update(:body => entry[:body])
-            end
-
-            log_time()
-
-            @db.fetch("SELECT oid,body FROM network_pool") do |row|
-                doc = Nokogiri::XML(row[:body],nil,NOKOGIRI_ENCODING){|c| c.default_xml.noblanks}
-
-                doc.root.xpath("CLUSTERS/ID").each do |e|
-                    cluster_id = e.text.to_i
-
-                    cluster_entry = cluster[cluster_id]
-
-                    if cluster_entry.nil?
-                        log_error("VNet #{row[:oid]} is in cluster #{cluster_id}, but it does not exist")
-
-                        e.remove
-
-                        vnets_fix[row[:oid]] = {:body => doc.root.to_s}
-                    else
-                        cluster_entry[:vnets] << row[:oid]
-                    end
-                end
-            end
-
-            vnets_fix.each do |id, entry|
-                @db[:network_pool].where(:oid => id).update(:body => entry[:body])
-            end
-        end
-
-        log_time()
-
-        create_table(:cluster_pool, :cluster_pool_new)
-
-        @db.transaction do
-            @db.fetch("SELECT * from cluster_pool") do |row|
-                cluster_id = row[:oid]
-                doc = Document.new(row[:body])
-
-                # Hosts
-                hosts_elem = doc.root.elements.delete("HOSTS")
-
-                hosts_new_elem = doc.root.add_element("HOSTS")
-
-                cluster[cluster_id][:hosts].each do |id|
-                    id_elem = hosts_elem.elements.delete("ID[.=#{id}]")
-
-                    if id_elem.nil?
-                        log_error("Host #{id} is missing from Cluster #{cluster_id} host id list")
-                    end
-
-                    hosts_new_elem.add_element("ID").text = id.to_s
-                end
-
-                hosts_elem.each_element("ID") do |id_elem|
-                    log_error("Host #{id_elem.text} is in Cluster #{cluster_id} host id list, but it should not")
-                end
-
-
-                # Datastores
-                ds_elem = doc.root.elements.delete("DATASTORES")
-
-                ds_new_elem = doc.root.add_element("DATASTORES")
-
-                cluster[cluster_id][:datastores].each do |id|
-                    id_elem = ds_elem.elements.delete("ID[.=#{id}]")
-
-                    if id_elem.nil?
-                        log_error("Datastore #{id} is missing from Cluster #{cluster_id} datastore id list")
-                    end
-
-                    ds_new_elem.add_element("ID").text = id.to_s
-
-                    if @db.fetch("SELECT * FROM cluster_datastore_relation WHERE cid=#{cluster_id} AND oid=#{id}").empty?
-                        log_error("Table cluster_datastore_relation is missing relation cluster #{cluster_id}, datastore #{id}")
-                        @db[:cluster_datastore_relation].insert(:cid => cluster_id, :oid => id)
-                    end
-                end
-
-                ds_elem.each_element("ID") do |id_elem|
-                    log_error("Datastore #{id_elem.text} is in Cluster #{cluster_id} datastore id list, but it should not")
-                end
-
-
-                # VNets
-                vnets_elem = doc.root.elements.delete("VNETS")
-
-                vnets_new_elem = doc.root.add_element("VNETS")
-
-                cluster[cluster_id][:vnets].each do |id|
-                    id_elem = vnets_elem.elements.delete("ID[.=#{id}]")
-
-                    if id_elem.nil?
-                        log_error("VNet #{id} is missing from Cluster #{cluster_id} vnet id list")
-                    end
-
-                    vnets_new_elem.add_element("ID").text = id.to_s
-
-                    if @db.fetch("SELECT * FROM cluster_network_relation WHERE cid=#{cluster_id} AND oid=#{id}").empty?
-                        log_error("Table cluster_network_relation is missing relation cluster #{cluster_id}, vnet #{id}")
-                        @db[:cluster_network_relation].insert(:cid => cluster_id, :oid => id)
-                    end
-                end
-
-                vnets_elem.each_element("ID") do |id_elem|
-                    log_error("VNet #{id_elem.text} is in Cluster #{cluster_id} vnet id list, but it should not")
-                end
-
-
-                row[:body] = doc.root.to_s
-
-                # commit
-                @db[:cluster_pool_new].insert(row)
-            end
-        end
-
-        # Rename table
-        @db.run("DROP TABLE cluster_pool")
-        @db.run("ALTER TABLE cluster_pool_new RENAME TO cluster_pool")
-
-        log_time()
-
-        @db.transaction do
-            create_table(:cluster_datastore_relation,
-                         :cluster_datastore_relation_new)
-
-            @db.fetch("SELECT * from cluster_datastore_relation") do |row|
-                if (cluster[row[:cid]][:datastores].count(row[:oid]) != 1)
-                    log_error("Table cluster_datastore_relation contains relation cluster #{row[:cid]}, datastore #{row[:oid]}, but it should not")
-                else
-                    @db[:cluster_datastore_relation_new].insert(row)
-                end
-            end
-
-            @db.run("DROP TABLE cluster_datastore_relation")
-            @db.run("ALTER TABLE cluster_datastore_relation_new RENAME TO cluster_datastore_relation")
-        end
-
-        log_time()
-
-        @db.transaction do
-            create_table(:cluster_network_relation,
-                         :cluster_network_relation_new)
-
-            @db.fetch("SELECT * from cluster_network_relation") do |row|
-                if (cluster[row[:cid]][:vnets].count(row[:oid]) != 1)
-                    log_error("Table cluster_network_relation contains relation cluster #{row[:cid]}, vnet #{row[:oid]}, but it should not")
-                else
-                    @db[:cluster_network_relation_new].insert(row)
-                end
-            end
-
-            @db.run("DROP TABLE cluster_network_relation")
-            @db.run("ALTER TABLE cluster_network_relation_new RENAME TO cluster_network_relation")
+    def nokogiri_doc(body)
+        Nokogiri::XML(body, nil, NOKOGIRI_ENCODING) do |c|
+            c.default_xml.noblanks
         end
     end
 
@@ -561,36 +328,6 @@ EOT
         @counters
     end
 
-    # Initialize all the host counters to 0
-    def init_host_counters
-        @db.fetch("SELECT oid, name FROM host_pool") do |row|
-            counters[:host][row[:oid]] = {
-                :name   => row[:name],
-                :memory => 0,
-                :cpu    => 0,
-                :rvms   => Set.new
-            }
-        end
-    end
-
-    # Init vnet counters
-    def init_vnet_counters
-        @db.fetch("SELECT oid,body FROM network_pool") do |row|
-            doc = Nokogiri::XML(row[:body],nil,NOKOGIRI_ENCODING){|c| c.default_xml.noblanks}
-
-            ar_leases = {}
-
-            doc.root.xpath("AR_POOL/AR/AR_ID").each do |ar_id|
-                ar_leases[ar_id.text.to_i] = {}
-            end
-
-            counters[:vnet][row[:oid]] = {
-                :ar_leases      => ar_leases,
-                :no_ar_leases   => {}
-            }
-        end
-    end
-
     # Initialize all the vrouter counters to 0
     def init_vrouter_counters
         @db.fetch("SELECT oid FROM vrouter_pool") do |row|
@@ -667,9 +404,30 @@ EOT
         # HOST/CLUSTER
         ########################################################################
 
-        check_clusters()
+        init_cluster
 
-        log_time()
+        check_host_cluster
+        fix_host_cluster
+
+        log_time
+
+        check_datastore_cluster
+        fix_datastore_cluster
+
+        log_time
+
+        check_network_cluster
+        fix_network_cluster
+
+        log_time
+
+        check_fix_cluster
+
+        log_time
+
+        check_fix_cluster_relations
+
+        log_time
 
         ########################################################################
         # Datastore
@@ -699,7 +457,7 @@ EOT
 
         log_time()
 
-        init_vnet_counters()
+        init_network_counters()
 
         log_time()
 
